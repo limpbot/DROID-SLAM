@@ -16,7 +16,6 @@ from droid import Droid
 
 import torch.nn.functional as F
 
-
 def show_image(image):
     image = image.permute(1, 2, 0).cpu().numpy()
     cv2.imshow('image', image / 255.0)
@@ -132,3 +131,63 @@ if __name__ == '__main__':
         save_reconstruction(droid, args.reconstruction_path)
 
     traj_est = droid.terminate(image_stream(args.imagedir, args.calib, args.stride))
+
+    print(type(traj_est))
+    print(traj_est)
+
+    from lietorch import SE3
+
+    #torch.save(torch.from_numpy(traj_est), "reconstructions/{}/traj_est.pt".format(args.reconstruction_path))
+    torch.save((SE3(torch.from_numpy(traj_est)).inv().matrix()), "reconstructions/{}/traj_est.pt".format(args.reconstruction_path))
+
+    pts3d = []
+    clr3d = []
+    import open3d as o3d
+    from visualization import droid_visualization
+    import droid_backends
+
+    droid_visualization_filter_thresh = 0.005
+
+    with torch.no_grad():
+
+        with droid.video.get_lock():
+            t = droid.video.counter.value
+            dirty_index, = torch.where(droid.video.dirty.clone())
+            dirty_index = dirty_index
+
+        droid.video.dirty[dirty_index] = False
+
+        # convert poses to 4x4 matrix
+        poses = torch.index_select(droid.video.poses, 0, dirty_index)
+        disps = torch.index_select(droid.video.disps, 0, dirty_index)
+        Ps = SE3(poses).inv().matrix().cpu().numpy()
+
+        images = torch.index_select(droid.video.images, 0, dirty_index)
+        images = images.cpu()[:, [2, 1, 0], 3::8, 3::8].permute(0, 2, 3, 1) / 255.0
+        points = droid_backends.iproj(SE3(poses).inv().data, disps, droid.video.intrinsics[0]).cpu()
+
+        thresh = droid_visualization_filter_thresh * torch.ones_like(disps.mean(dim=[1, 2]))
+
+        count = droid_backends.depth_filter(
+            droid.video.poses, droid.video.disps, droid.video.intrinsics[0], dirty_index, thresh)
+
+        count = count.cpu()
+        disps = disps.cpu()
+        masks = ((count >= 2) & (disps > .5 * disps.mean(dim=[1, 2], keepdim=True)))
+
+        for i in range(len(dirty_index)):
+            pose = Ps[i]
+            ix = dirty_index[i].item()
+
+            mask = masks[i].reshape(-1)
+            pts = points[i].reshape(-1, 3)[mask].cpu().numpy()
+            clr = images[i].reshape(-1, 3)[mask].cpu().numpy()
+
+            pts3d.append(pts)
+            clr3d.append(clr)
+    ## add point actor ###
+    point_cloud = o3d.geometry.PointCloud()
+    point_cloud.points = o3d.utility.Vector3dVector(np.concatenate(pts3d))
+    point_cloud.colors = o3d.utility.Vector3dVector(np.concatenate(clr3d))
+
+    o3d.io.write_point_cloud(filename="reconstructions/{}/pcl.ply".format(args.reconstruction_path), pointcloud=point_cloud)
