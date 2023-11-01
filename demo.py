@@ -21,6 +21,16 @@ def show_image(image):
     cv2.imshow('image', image / 255.0)
     cv2.waitKey(1)
 
+
+import re
+from pathlib import Path
+
+def atoi(text):
+    return int(text) if text.isdigit() else text
+
+def sorted_image_list(image_list):
+    return sorted(image_list, key=lambda f: [atoi(val) for val in re.split(r'(\d+)', Path(f).stem)])
+
 def image_stream(imagedir, calib, stride):
     """ image generator """
 
@@ -34,6 +44,10 @@ def image_stream(imagedir, calib, stride):
     K[1,2] = cy
 
     image_list = sorted(os.listdir(imagedir))[::stride]
+    image_list = sorted_image_list(image_list)
+
+    print('first 10 image relative file paths')
+    print(image_list[:10])
 
     for t, imfile in enumerate(image_list):
         image = cv2.imread(os.path.join(imagedir, imfile))
@@ -55,7 +69,7 @@ def image_stream(imagedir, calib, stride):
         yield t, image[None], intrinsics
 
 
-def save_reconstruction(droid, reconstruction_path):
+def save_reconstruction(droid, reconstruction_path, imagedir, stride):
 
     from pathlib import Path
     import random
@@ -65,16 +79,40 @@ def save_reconstruction(droid, reconstruction_path):
     tstamps = droid.video.tstamp[:t].cpu().numpy()
     images = droid.video.images[:t].cpu().numpy()
     disps = droid.video.disps_up[:t].cpu().numpy()
+
     poses = droid.video.poses[:t].cpu().numpy()
     intrinsics = droid.video.intrinsics[:t].cpu().numpy()
 
-    Path("reconstructions/{}".format(reconstruction_path)).mkdir(parents=True, exist_ok=True)
-    np.save("reconstructions/{}/tstamps.npy".format(reconstruction_path), tstamps)
-    np.save("reconstructions/{}/images.npy".format(reconstruction_path), images)
-    np.save("reconstructions/{}/disps.npy".format(reconstruction_path), disps)
-    np.save("reconstructions/{}/poses.npy".format(reconstruction_path), poses)
-    np.save("reconstructions/{}/intrinsics.npy".format(reconstruction_path), intrinsics)
+    image_list = sorted(os.listdir(imagedir))[::stride]
+    image_list = sorted_image_list(image_list)
 
+    Path("reconstructions/{}".format(reconstruction_path)).mkdir(parents=True, exist_ok=True)
+    Path("reconstructions/{}/disps".format(reconstruction_path)).mkdir(parents=True, exist_ok=True)
+
+    for t, imfile in enumerate(image_list):
+        # H x W
+        # h1 = int(np.sqrt((384 * 512) / (H * W)) * H)
+        # h1 = h1 - h1 % 8
+        # w1 = int(np.sqrt((384 * 512) / (H * W)) * W)
+        # w1 = w1 - w1 % 8
+        image = cv2.imread(os.path.join(imagedir, imfile))
+        h0, w0, _ = image.shape
+        h1 = int(h0 * np.sqrt((384 * 512) / (h0 * w0)))
+        w1 = int(w0 * np.sqrt((384 * 512) / (h0 * w0)))
+        h_pad = h1 - h1 % 8
+        w_pad = w1 - w1 % 8
+        disp = disps[t]
+        disp = np.pad(disp, ((0, h_pad), (0, w_pad)))
+        disp = cv2.resize(disp, (w0, h0))
+        disp *= (w0 / w1)
+        cv2.imwrite(f"reconstructions/{reconstruction_path}/depths/{Path(imfile).stem}.jpg", disp)
+
+    # np.save("reconstructions/{}/tstamps.npy".format(reconstruction_path), tstamps)
+    # np.save("reconstructions/{}/images.npy".format(reconstruction_path), images)
+    # np.save("reconstructions/{}/disps.npy".format(reconstruction_path), disps)
+    # np.save("reconstructions/{}/poses.npy".format(reconstruction_path), poses)
+    # np.save("reconstructions/{}/intrinsics.npy".format(reconstruction_path), intrinsics)
+    #
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -128,7 +166,7 @@ if __name__ == '__main__':
         droid.track(t, image, intrinsics=intrinsics)
 
     if args.reconstruction_path is not None:
-        save_reconstruction(droid, args.reconstruction_path)
+        save_reconstruction(droid, args.reconstruction_path, imagedir=args.imagedir, stride=args.stride)
 
     traj_est = droid.terminate(image_stream(args.imagedir, args.calib, args.stride))
 
@@ -191,3 +229,4 @@ if __name__ == '__main__':
     point_cloud.colors = o3d.utility.Vector3dVector(np.concatenate(clr3d))
 
     o3d.io.write_point_cloud(filename="reconstructions/{}/pcl.ply".format(args.reconstruction_path), pointcloud=point_cloud)
+
