@@ -75,13 +75,13 @@ def save_reconstruction(droid, reconstruction_path, imagedir, stride):
     import random
     import string
 
-    t = droid.video.counter.value
-    tstamps = droid.video.tstamp[:t].cpu().numpy()
-    images = droid.video.images[:t].cpu().numpy()
-    disps = droid.video.disps_up[:t].cpu().numpy()
+    # t = droid.video.counter.value
+    #tstamps = droid.video.tstamp[:t].cpu().numpy()
+    #images = droid.video.images[:t].cpu().numpy()
+    #poses = droid.video.poses[:t].cpu().numpy()
+    #intrinsics = droid.video.intrinsics[:t].cpu().numpy()
 
-    poses = droid.video.poses[:t].cpu().numpy()
-    intrinsics = droid.video.intrinsics[:t].cpu().numpy()
+    disps = droid.video.disps_up[:].cpu().numpy()
 
     image_list = sorted(os.listdir(imagedir))[::stride]
     image_list = sorted_image_list(image_list)
