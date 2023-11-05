@@ -75,44 +75,49 @@ def save_reconstruction(droid, reconstruction_path, imagedir, stride):
     import random
     import string
 
-    # t = droid.video.counter.value
-    #tstamps = droid.video.tstamp[:t].cpu().numpy()
+    t = droid.video.counter.value
     #images = droid.video.images[:t].cpu().numpy()
     #poses = droid.video.poses[:t].cpu().numpy()
     #intrinsics = droid.video.intrinsics[:t].cpu().numpy()
-
-    disps = droid.video.disps_up[:].cpu().numpy()
+    tstamps = droid.video.tstamp[:t].cpu().numpy()
+    disps = droid.video.disps_up[:t].cpu().numpy()
 
     image_list = sorted(os.listdir(imagedir))[::stride]
     image_list = sorted_image_list(image_list)
 
     Path("reconstructions/{}".format(reconstruction_path)).mkdir(parents=True, exist_ok=True)
-    Path("reconstructions/{}/disps".format(reconstruction_path)).mkdir(parents=True, exist_ok=True)
+    # Path("reconstructions/{}/depths".format(reconstruction_path)).mkdir(parents=True, exist_ok=True)
 
-    for t, imfile in enumerate(image_list):
-        # H x W
-        # h1 = int(np.sqrt((384 * 512) / (H * W)) * H)
-        # h1 = h1 - h1 % 8
-        # w1 = int(np.sqrt((384 * 512) / (H * W)) * W)
-        # w1 = w1 - w1 % 8
-        image = cv2.imread(os.path.join(imagedir, imfile))
-        h0, w0, _ = image.shape
-        h1 = int(h0 * np.sqrt((384 * 512) / (h0 * w0)))
-        w1 = int(w0 * np.sqrt((384 * 512) / (h0 * w0)))
-        h_pad = h1 - h1 % 8
-        w_pad = w1 - w1 % 8
-        disp = disps[t]
+    # for t, imfile in enumerate(image_list):
+    # H x W
+    # h1 = int(np.sqrt((384 * 512) / (H * W)) * H)
+    # h1 = h1 - h1 % 8
+    # w1 = int(np.sqrt((384 * 512) / (H * W)) * W)
+    # w1 = w1 - w1 % 8
+    image = cv2.imread(os.path.join(imagedir, image_list[0]))
+    h0, w0, _ = image.shape
+    h1 = int(h0 * np.sqrt((384 * 512) / (h0 * w0)))
+    w1 = int(w0 * np.sqrt((384 * 512) / (h0 * w0)))
+    h_pad = h1 % 8
+    w_pad = w1 % 8
+
+    disps_orig = np.zeros((t, h0, w0))
+    for i in range(t):
+        disp = disps[i].copy()
         disp = np.pad(disp, ((0, h_pad), (0, w_pad)))
-        disp = cv2.resize(disp, (w0, h0))
-        disp *= (w0 / w1)
-        cv2.imwrite(f"reconstructions/{reconstruction_path}/depths/{Path(imfile).stem}.jpg", disp)
+        disps_orig[i] = cv2.resize(disp, (w0, h0), 0, 0, interpolation=cv2.INTER_NEAREST)
 
-    # np.save("reconstructions/{}/tstamps.npy".format(reconstruction_path), tstamps)
-    # np.save("reconstructions/{}/images.npy".format(reconstruction_path), images)
-    # np.save("reconstructions/{}/disps.npy".format(reconstruction_path), disps)
-    # np.save("reconstructions/{}/poses.npy".format(reconstruction_path), poses)
+        # disp *= (w0 / w1)
+        # intrinsics[0::2] *= (w1 / w0)
+        # intrinsics[1::2] *= (h1 / h0)
+        # np.save(f"reconstructions/{reconstruction_path}/depths/{Path(imfile).stem}.npy", disp[None, ])
+
     # np.save("reconstructions/{}/intrinsics.npy".format(reconstruction_path), intrinsics)
-    #
+    np.save("reconstructions/{}/tstamps.npy".format(reconstruction_path), tstamps)
+    # np.save("reconstructions/{}/images.npy".format(reconstruction_path), images)
+    np.save("reconstructions/{}/disps.npy".format(reconstruction_path), disps_orig)
+    # np.save("reconstructions/{}/poses.npy".format(reconstruction_path), poses)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -165,13 +170,13 @@ if __name__ == '__main__':
         
         droid.track(t, image, intrinsics=intrinsics)
 
-    if args.reconstruction_path is not None:
-        save_reconstruction(droid, args.reconstruction_path, imagedir=args.imagedir, stride=args.stride)
-
     traj_est = droid.terminate(image_stream(args.imagedir, args.calib, args.stride))
 
-    print(type(traj_est))
-    print(traj_est)
+    #print(type(traj_est))
+    #print(traj_est)
+
+    #if args.reconstruction_path is not None:
+    #    save_reconstruction(droid, args.reconstruction_path, imagedir=args.imagedir, stride=args.stride)
 
     from lietorch import SE3
 
@@ -198,6 +203,9 @@ if __name__ == '__main__':
         # convert poses to 4x4 matrix
         poses = torch.index_select(droid.video.poses, 0, dirty_index)
         disps = torch.index_select(droid.video.disps, 0, dirty_index)
+        tstamps = torch.index_select(droid.video.tstamp, 0, dirty_index)
+        disps_up = torch.index_select(droid.video.disps_up, 0, dirty_index)
+
         Ps = SE3(poses).inv().matrix().cpu().numpy()
 
         images = torch.index_select(droid.video.images, 0, dirty_index)
@@ -209,11 +217,33 @@ if __name__ == '__main__':
         count = droid_backends.depth_filter(
             droid.video.poses, droid.video.disps, droid.video.intrinsics[0], dirty_index, thresh)
 
+        count_up = droid_backends.depth_filter(
+            droid.video.poses, droid.video.disps_up, droid.video.intrinsics[0], dirty_index, thresh)
+
         count = count.cpu()
         disps = disps.cpu()
         masks = ((count >= 2) & (disps > .5 * disps.mean(dim=[1, 2], keepdim=True)))
+        masks_up = ((count_up >= 2) & (disps_up > .5 * disps_up.mean(dim=[1, 2], keepdim=True)))
+
+        image_list = sorted(os.listdir(args.imagedir))
+        image = cv2.imread(os.path.join(args.imagedir, image_list[0]))
+        h0, w0, _ = image.shape
+        h1 = int(h0 * np.sqrt((384 * 512) / (h0 * w0)))
+        w1 = int(w0 * np.sqrt((384 * 512) / (h0 * w0)))
+        h_pad = h1 % 8
+        w_pad = w1 % 8
+
+        disps_up = torch.nn.functional.pad(disps_up, (0, w_pad, 0, h_pad))
+        # masks_up = torch.nn.functional.pad(masks_up, (0, w_pad, 0, h_pad))
+
+        torch.save(tstamps, f'reconstructions/{args.reconstruction_path}/tstamps.pt')
+        torch.save(disps_up, f'reconstructions/{args.reconstruction_path}/disps_up.pt')
+        #torch.save(masks, f'reconstructions/{args.reconstruction_path}/masks.pt')
+        #torch.save(disps, f'reconstructions/{args.reconstruction_path}/disps.pt')
+        #torch.save(masks_up, f'reconstructions/{args.reconstruction_path}/masks_up.pt')
 
         for i in range(len(dirty_index)):
+            print(i)
             pose = Ps[i]
             ix = dirty_index[i].item()
 
