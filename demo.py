@@ -203,6 +203,8 @@ if __name__ == '__main__':
         # convert poses to 4x4 matrix
         poses = torch.index_select(droid.video.poses, 0, dirty_index)
         disps = torch.index_select(droid.video.disps, 0, dirty_index)
+        intr = torch.index_select(droid.video.intrinsics, 0, dirty_index)
+
         tstamps = torch.index_select(droid.video.tstamp, 0, dirty_index)
         disps_up = torch.index_select(droid.video.disps_up, 0, dirty_index)
 
@@ -234,13 +236,14 @@ if __name__ == '__main__':
         w_pad = w1 % 8
 
         disps_up = torch.nn.functional.pad(disps_up, (0, w_pad, 0, h_pad))
-        # masks_up = torch.nn.functional.pad(masks_up, (0, w_pad, 0, h_pad))
+        masks_up = torch.nn.functional.pad(masks_up, (0, w_pad, 0, h_pad))
 
         torch.save(tstamps, f'reconstructions/{args.reconstruction_path}/tstamps.pt')
-        torch.save(disps_up, f'reconstructions/{args.reconstruction_path}/disps_up.pt')
-        #torch.save(masks, f'reconstructions/{args.reconstruction_path}/masks.pt')
-        #torch.save(disps, f'reconstructions/{args.reconstruction_path}/disps.pt')
+        #torch.save(disps_up, f'reconstructions/{args.reconstruction_path}/disps_up.pt')
         #torch.save(masks_up, f'reconstructions/{args.reconstruction_path}/masks_up.pt')
+        torch.save(masks, f'reconstructions/{args.reconstruction_path}/masks.pt')
+        torch.save(disps, f'reconstructions/{args.reconstruction_path}/disps.pt')
+        torch.save(intr, f'reconstructions/{args.reconstruction_path}/intr.pt')
 
         for i in range(len(dirty_index)):
             print(i)
